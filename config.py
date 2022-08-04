@@ -22,6 +22,6 @@ def get_arguments():
     parser.add_argument("--s", type=float, default=0.5)
     parser.add_argument("--k", type=int, default=2)
     parser.add_argument("--grid_rescale", type=float, default=1)
-    parser.add_argument("--ratio", type=float, default=0.5)
+    parser.add_argument("--ratio", type=int, default=2)
 
     return parser
