@@ -6,7 +6,7 @@ def get_arguments():
     parser.add_argument("--checkpoints", type=str, default="./checkpoints")
     parser.add_argument("--temps", type=str, default="./temps")
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--train_scratch", action="store_true")
+    parser.add_argument("--train_scratch", action="store_false")
     parser.add_argument("--dataset", type=str, default="cifar10")
     parser.add_argument("--attack_mode", type=str, default="all2one")
     parser.add_argument("--bs", type=int, default=128)
