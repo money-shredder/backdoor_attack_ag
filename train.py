@@ -10,11 +10,13 @@ from model.resnet import ResNet18
 from model.MNISTnet import MNISTnet
 from network.models import Denormalizer
 from torch import nn
+import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 from utils.dataloader import PostTensorTransform, get_dataloader
 from utils.utils import progress_bar
+import cv2
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]="0,1,2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2"
 
 def get_model(opt):
     net = None
@@ -53,9 +55,10 @@ def train(net, optimizer, scheduler, train_dl, identity_grid, noise_grid, tf_wri
         bs = inputs.shape[0]
         # Create backdoor data
         num_bd = int(bs * rate_bd)
-        grid_temps = (identity_grid + opt.s * noise_grid / opt.input_height) * opt.grid_rescale
+        grid_temps = (identity_grid + opt.s * noise_grid / (opt.input_height * opt.ratio)) * opt.grid_rescale
         grid_temps = torch.clamp(grid_temps, -1, 1)
-        inputs_bd = F.grid_sample(inputs[:num_bd], grid_temps.repeat(num_bd, 1, 1, 1), align_corners=True)
+        bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs)
+        inputs_bd = F.grid_sample(inputs[:num_bd, :, bbx1:bbx2, bby1:bby2], grid_temps.repeat(num_bd, 1, 1, 1), align_corners=True)
         if opt.attack_mode == "all2one":
             targets_bd = torch.ones_like(targets[:num_bd]) * opt.target_label
         if opt.attack_mode == "all2all":
@@ -122,9 +125,11 @@ def eval(net, optimizer, scheduler, test_dl, identity_grid, noise_grid, best_cle
             preds_clean = net(inputs)
             total_clean_correct += torch.sum(torch.argmax(preds_clean, 1) == targets)
             # Backdoor Evaluation
-            grid_temps = (identity_grid + opt.s * noise_grid / opt.input_height) * opt.grid_rescale
+            grid_temps = (identity_grid + opt.s * noise_grid / (opt.input_height * opt.ratio)) * opt.grid_rescale
             grid_temps = torch.clamp(grid_temps, -1, 1)
-            inputs_bd = F.grid_sample(inputs, grid_temps.repeat(bs, 1, 1, 1), align_corners=True)
+            bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs)
+            inputs_bd = F.grid_sample(inputs[:, :, bbx1:bbx2, bby1:bby2], grid_temps.repeat(bs, 1, 1, 1),
+                                      align_corners=True)
             if opt.attack_mode == "all2one":
                 targets_bd = torch.ones_like(targets) * opt.target_label
             if opt.attack_mode == "all2all":
@@ -162,6 +167,30 @@ def eval(net, optimizer, scheduler, test_dl, identity_grid, noise_grid, best_cle
             }
             json.dump(results_dict, f, indent=2)
     return best_clean_acc, best_bd_acc
+
+def saliency_bbox(img):
+    opt = config.get_arguments().parse_args()
+    size = img.size()
+    W = size[1]
+    H = size[2]
+    ratio = opt.ratio
+    cut_w = F.int(W * ratio)
+    cut_h = F.int(H * ratio)
+
+    # compute the image saliency map
+    temp_img = img.cpu().numpy().transpose(1, 2, 0)
+    saliency = cv2.saliency.StaticSaliencyFineGrained_create()
+    (success, saliencyMap) = saliency.computeSaliency(temp_img)
+    saliencyMap = (saliencyMap * 255).astype("uint8")
+    maximum_indices = F.unravel_index(F.argmax(saliencyMap, axis=None), saliencyMap.shape)
+    x = maximum_indices[0]
+    y = maximum_indices[1]
+    bbx1 = F.clip(x - cut_w // 2, 0, W)
+    bby1 = F.clip(y - cut_h // 2, 0, H)
+    bbx2 = F.clip(x + cut_w // 2, 0, W)
+    bby2 = F.clip(y + cut_h // 2, 0, H)
+    return bbx1, bby1, bbx2, bby2
+
 
 def main():
     opt = config.get_arguments().parse_args()
@@ -207,20 +236,20 @@ def main():
         os.makedirs(opt.log_dir)
 
     if opt.train_scratch:
-        print("Train from scratch!!!")
+        print("Train from scratch")
         best_clean_acc = 0.0
         best_bd_acc = 0.0
         epoch_current = 0
 
         # grid design
-        ins = torch.rand(1, 2, opt.k, opt.k) * 2 - 1
+        ins = np.random.beta(1, 1, (1, 2, opt.k, opt.k)) * 2 - 1
         ins = ins / torch.mean(torch.abs(ins))
         noise_grid = (
-            F.upsample(ins, size=opt.input_height, mode="bicubic", align_corners=True)
+            F.upsample(ins, size=opt.input_height * opt.ratio, mode="bicubic", align_corners=True)
                 .permute(0, 2, 3, 1)
                 .to(opt.device)
         )
-        array1d = torch.linspace(-1, 1, steps=opt.input_height)
+        array1d = torch.linspace(-1, 1, steps=opt.input_height * opt.ratio)
         x, y = torch.meshgrid(array1d, array1d)
         identity_grid = torch.stack((y, x), dim=2)[None, ...].to(opt.device)
         shutil.rmtree(opt.ckpt_folder, ignore_errors=True)
