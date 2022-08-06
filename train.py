@@ -49,30 +49,50 @@ def saliency_bbox(img):
     ratio = opt.ratio
     cut_w = int(W // ratio)
     cut_h = int(H // ratio)
-    # compute the image saliency map
-    temp_img = img.cpu().numpy().transpose(1, 2, 0)
-    saliency = cv2.saliency.StaticSaliencyFineGrained_create()
-    (success, saliencyMap) = saliency.computeSaliency(temp_img)
-    saliencyMap = (saliencyMap * 255).astype("uint8")
-    maximum_indices = np.unravel_index(np.argmax(saliencyMap, axis=None), saliencyMap.shape)
-    x = maximum_indices[0]
-    y = maximum_indices[1]
-    bbx1 = np.clip(x - cut_w // 2, 0, W)
-    bby1 = np.clip(y - cut_h // 2, 0, H)
-    bbx2 = np.clip(x + cut_w // 2, 0, W)
-    bby2 = np.clip(y + cut_h // 2, 0, H)
-    if (x - cut_w // 2) < 0:
-        bbx1 = 0
-        bbx2 = W // opt.ratio
-    if (x + cut_w // 2) > W:
-        bbx1 = W - (W // opt.ratio)
-        bbx2 = W
-    if (y - cut_h // 2) < 0:
-        bby1 = 0
-        bby2 = H // opt.ratio
-    if (y + cut_h // 2) > H:
-        bby1 = H - (H // opt.ratio)
-        bby2 = H
+    if opt.dataset == "mnist":
+        x = 14
+        y = 14
+        bbx1 = np.clip(x - cut_w // 2, 0, W)
+        bby1 = np.clip(y - cut_h // 2, 0, H)
+        bbx2 = np.clip(x + cut_w // 2, 0, W)
+        bby2 = np.clip(y + cut_h // 2, 0, H)
+        if (x - cut_w // 2) < 0:
+            bbx1 = 0
+            bbx2 = W // opt.ratio
+        if (x + cut_w // 2) > W:
+            bbx1 = W - (W // opt.ratio)
+            bbx2 = W
+        if (y - cut_h // 2) < 0:
+            bby1 = 0
+            bby2 = H // opt.ratio
+        if (y + cut_h // 2) > H:
+            bby1 = H - (H // opt.ratio)
+            bby2 = H
+    else:
+        # compute the image saliency map
+        temp_img = img.cpu().numpy().transpose(1, 2, 0)
+        saliency = cv2.saliency.StaticSaliencyFineGrained_create()
+        (success, saliencyMap) = saliency.computeSaliency(temp_img)
+        saliencyMap = (saliencyMap * 255).astype("uint8")
+        maximum_indices = np.unravel_index(np.argmax(saliencyMap, axis=None), saliencyMap.shape)
+        x = maximum_indices[0]
+        y = maximum_indices[1]
+        bbx1 = np.clip(x - cut_w // 2, 0, W)
+        bby1 = np.clip(y - cut_h // 2, 0, H)
+        bbx2 = np.clip(x + cut_w // 2, 0, W)
+        bby2 = np.clip(y + cut_h // 2, 0, H)
+        if (x - cut_w // 2) < 0:
+            bbx1 = 0
+            bbx2 = W // opt.ratio
+        if (x + cut_w // 2) > W:
+            bbx1 = W - (W // opt.ratio)
+            bbx2 = W
+        if (y - cut_h // 2) < 0:
+            bby1 = 0
+            bby2 = H // opt.ratio
+        if (y + cut_h // 2) > H:
+            bby1 = H - (H // opt.ratio)
+            bby2 = H
     return bbx1, bby1, bbx2, bby2
 
 
@@ -99,11 +119,10 @@ def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_wri
         # Create backdoor data
         num_bd = int(bs * rate_bd)
         input_origin = copy.deepcopy(inputs[:num_bd])
-        num_cross = int(num_bd * opt.cross_ratio)
+
         grid_temps = (identity_grid + opt.s * noise_grid / (opt.input_height // opt.ratio)) * opt.grid_rescale
         grid_temps = torch.clamp(grid_temps, -1, 1).float()
         inputs_bd = inputs[:num_bd]
-
         for id_img in range(num_bd):
             bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs_bd[id_img])
             temp = inputs_bd[id_img:(id_img + 1), :, bbx1:bbx2, bby1:bby2]
@@ -113,7 +132,6 @@ def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_wri
             targets_bd = torch.ones_like(targets[:num_bd]) * opt.target_label
         if opt.attack_mode == "all2all":
             targets_bd = torch.remainder(targets[:num_bd] + 1, opt.num_classes)
-
 
         total_inputs = torch.cat([inputs_bd, inputs[num_bd:]], dim=0)
         total_inputs = transforms(total_inputs)
@@ -128,10 +146,10 @@ def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_wri
 
         total_sample += bs
         total_loss_ce += loss_ce.detach()
-        total_clean += bs - num_bd - num_cross
+        total_clean += bs - num_bd
         total_bd += num_bd
-        total_clean_correct += torch.sum(torch.argmax(total_preds[(num_bd + num_cross):], dim=1) == total_targets[(num_bd + num_cross):])
         total_bd_correct += torch.sum(torch.argmax(total_preds[:num_bd], dim=1) == targets_bd)
+        total_clean_correct += torch.sum(torch.argmax(total_preds[num_bd:], dim=1) == total_targets[num_bd:])
         avg_acc_clean = total_clean_correct * 100.0 / total_clean
         avg_acc_bd = total_bd_correct * 100.0 / total_bd
 
@@ -160,7 +178,6 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
     total_sample = 0
     total_clean_correct = 0
     total_bd_correct = 0
-    total_cross_correct = 0
     for batch_idx, (inputs, targets) in enumerate(test_dl):
         with torch.no_grad():
             inputs, targets = inputs.to(opt.device), targets.to(opt.device)
@@ -186,7 +203,7 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
             total_bd_correct += torch.sum(torch.argmax(preds_bd, 1) == targets_bd)
             acc_clean = total_clean_correct * 100.0 / total_sample
             acc_bd = total_bd_correct * 100.0 / total_sample
-            # Evaluate cross
+
             info_string = "Clean Acc: {:.4f} - Best: {:.4f} | Bd Acc: {:.4f} - Best: {:.4f}".format(acc_clean, best_clean_acc, acc_bd, best_bd_acc)
             progress_bar(batch_idx, len(test_dl), info_string)
     # tensorboard
@@ -256,7 +273,7 @@ def main():
     # Load pretrained model
     mode = opt.attack_mode
     # opt.ckpt_folder = os.path.join(opt.checkpoints, opt.dataset)
-    opt.ckpt_folder = os.path.join(opt.checkpoints, 'cifar10-2')
+    opt.ckpt_folder = os.path.join(opt.checkpoints, 'Mnist')
     opt.ckpt_path = os.path.join(opt.ckpt_folder, "{}_{}.pth.tar".format(opt.dataset, mode))
     opt.log_dir = os.path.join(opt.ckpt_folder, "log_dir")
     if not os.path.exists(opt.log_dir):
@@ -282,7 +299,6 @@ def main():
         print("Train from scratch!!!")
         best_clean_acc = 0.0
         best_bd_acc = 0.0
-        best_cross_acc = 0.0
         epoch_current = 0
 
         # Prepare grid

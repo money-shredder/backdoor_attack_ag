@@ -13,7 +13,7 @@ def get_arguments():
     parser.add_argument("--lr", type=float, default=1e-2)
     parser.add_argument("--scheduler_milestones", type=list, default=[100, 200, 300, 400])
     parser.add_argument("--scheduler_lambda", type=float, default=0.1)
-    parser.add_argument("--n_iters", type=int, default=500)
+    parser.add_argument("--n_iters", type=int, default=1000)
     parser.add_argument("--num_workers", type=float, default=2)
     parser.add_argument("--target_label", type=int, default=0)
     parser.add_argument("--pc", type=float, default=0.1)
