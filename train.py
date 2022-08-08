@@ -2,7 +2,6 @@ import json
 import os
 import shutil
 from time import time
-
 import config
 import numpy as np
 import cv2
@@ -10,34 +9,28 @@ import copy
 import torch
 import torch.nn.functional as F
 import torchvision
+
 from model.resnet import ResNet18
 from model.preact_resnet import PreActResNet18
 from model.MNISTnet import MNISTnet
 from network.models import Denormalizer
-from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 from utils.dataloader import PostTensorTransform, get_dataloader
 from utils.utils import progress_bar
+import os
+
+
 
 
 def get_model(opt):
-    net = None
-    optimizer = None
-    scheduler = None
-
     if opt.dataset == "cifar10" or opt.dataset == "gtsrb":
         net = PreActResNet18(num_classes=opt.num_classes).to(opt.device)
     if opt.dataset == "celeba":
         net = ResNet18().to(opt.device)
     if opt.dataset == "mnist":
         net = MNISTnet().to(opt.device)
-
-    # Optimizer
     optimizer = torch.optim.SGD(net.parameters(), opt.lr, momentum=0.9, weight_decay=5e-4)
-
-    # Scheduler
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, opt.scheduler_milestones, opt.scheduler_lambda)
-
     return net, optimizer, scheduler
 
 
@@ -98,7 +91,8 @@ def saliency_bbox(img):
 
 def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_writer, epoch, opt):
     print(" Train:")
-    net.to(opt.device)
+    device_ids = [0, 1, 2]
+    net = torch.nn.DataParallel(net, device_ids=device_ids).cuda()
     net.train()
     rate_bd = opt.pc
     total_loss_ce = 0
@@ -229,7 +223,7 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
         with open(os.path.join(opt.ckpt_folder, "results.txt"), "w+") as f:
             results_dict = {
                 "clean_acc": best_clean_acc.item(),
-                "bd_acc": best_bd_acc.item(),
+                "bd_acc": best_bd_acc.item()
             }
             json.dump(results_dict, f, indent=2)
     return best_clean_acc, best_bd_acc
@@ -273,7 +267,7 @@ def main():
     # Load pretrained model
     mode = opt.attack_mode
     # opt.ckpt_folder = os.path.join(opt.checkpoints, opt.dataset)
-    opt.ckpt_folder = os.path.join(opt.checkpoints, 'Mnist')
+    opt.ckpt_folder = os.path.join(opt.checkpoints, 'cifar10')
     opt.ckpt_path = os.path.join(opt.ckpt_folder, "{}_{}.pth.tar".format(opt.dataset, mode))
     opt.log_dir = os.path.join(opt.ckpt_folder, "log_dir")
     if not os.path.exists(opt.log_dir):
@@ -281,11 +275,11 @@ def main():
 
     if opt.continue_training:
         if os.path.exists(opt.ckpt_path):
-            print("Continue training!!")
+            print("Continue training")
             state_dict = torch.load(opt.ckpt_path)
-            net.load_state_dict(state_dict["netC"])
-            optimizer.load_state_dict(state_dict["optimizerC"])
-            scheduler.load_state_dict(state_dict["schedulerC"])
+            net.load_state_dict(state_dict["net"])
+            optimizer.load_state_dict(state_dict["optimizer"])
+            scheduler.load_state_dict(state_dict["scheduler"])
             best_clean_acc = state_dict["best_clean_acc"]
             best_bd_acc = state_dict["best_bd_acc"]
             epoch_current = state_dict["epoch_current"]
@@ -296,7 +290,7 @@ def main():
             print("Pretrained model doesnt exist")
             exit()
     else:
-        print("Train from scratch!!!")
+        print("Train from scratch")
         best_clean_acc = 0.0
         best_bd_acc = 0.0
         epoch_current = 0
