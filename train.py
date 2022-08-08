@@ -110,58 +110,93 @@ def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_wri
         optimizer.zero_grad()
         inputs, targets = inputs.to(opt.device), targets.to(opt.device)
         bs = inputs.shape[0]
-        # Create backdoor data
-        num_bd = int(bs * rate_bd)
-        input_origin = copy.deepcopy(inputs[:num_bd])
 
+        # Create backdoor data
         grid_temps = (identity_grid + opt.s * noise_grid / (opt.input_height // opt.ratio)) * opt.grid_rescale
         grid_temps = torch.clamp(grid_temps, -1, 1).float()
-        inputs_bd = inputs[:num_bd]
-        for id_img in range(num_bd):
-            bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs_bd[id_img])
-            temp = inputs_bd[id_img:(id_img + 1), :, bbx1:bbx2, bby1:bby2]
-            inputs_bd[id_img:(id_img + 1), :, bbx1:bbx2, bby1:bby2] = F.grid_sample(temp, grid_temps.repeat(1, 1, 1, 1),
-                                                                                    align_corners=True)
-        if opt.attack_mode == "all2one":
-            targets_bd = torch.ones_like(targets[:num_bd]) * opt.target_label
-        if opt.attack_mode == "all2all":
-            targets_bd = torch.remainder(targets[:num_bd] + 1, opt.num_classes)
 
-        total_inputs = torch.cat([inputs_bd, inputs[num_bd:]], dim=0)
-        total_inputs = transforms(total_inputs)
-        total_targets = torch.cat([targets_bd, targets[num_bd:]], dim=0)
-        start = time()
-        total_preds = net(total_inputs)
-        total_time += time() - start
-        loss_ce = criterion_CE(total_preds, total_targets)
-        loss = loss_ce
-        loss.backward()
-        optimizer.step()
+        if opt.attack_choice == "dirty":
+            num_bd = int(bs * rate_bd)
+            input_origin = copy.deepcopy(inputs[:num_bd])
+            inputs_bd = inputs[:num_bd]
+            for id_img in range(num_bd):
+                bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs_bd[id_img])
+                temp = inputs_bd[id_img:(id_img + 1), :, bbx1:bbx2, bby1:bby2]
+                inputs_bd[id_img:(id_img + 1), :, bbx1:bbx2, bby1:bby2] = F.grid_sample(temp, grid_temps.repeat(1, 1, 1, 1),
+                                                                                        align_corners=True)
+            if opt.attack_mode == "all2one":
+                targets_bd = torch.ones_like(targets[:num_bd]) * opt.target_label
+            if opt.attack_mode == "all2all":
+                targets_bd = torch.remainder(targets[:num_bd] + 1, opt.num_classes)
+            total_inputs = torch.cat([inputs_bd, inputs[num_bd:]], dim=0)
+            total_inputs = transforms(total_inputs)
+            total_targets = torch.cat([targets_bd, targets[num_bd:]], dim=0)
+            start = time()
+            total_preds = net(total_inputs)
+            total_time += time() - start
+            loss_ce = criterion_CE(total_preds, total_targets)
+            loss = loss_ce
+            loss.backward()
+            optimizer.step()
 
-        total_sample += bs
-        total_loss_ce += loss_ce.detach()
-        total_clean += bs - num_bd
-        total_bd += num_bd
-        total_bd_correct += torch.sum(torch.argmax(total_preds[:num_bd], dim=1) == targets_bd)
-        total_clean_correct += torch.sum(torch.argmax(total_preds[num_bd:], dim=1) == total_targets[num_bd:])
-        avg_acc_clean = total_clean_correct * 100.0 / total_clean
-        avg_acc_bd = total_bd_correct * 100.0 / total_bd
+            total_sample += bs
+            total_loss_ce += loss_ce.detach()
+            total_clean += bs - num_bd
+            total_bd += num_bd
+            total_bd_correct += torch.sum(torch.argmax(total_preds[:num_bd], dim=1) == targets_bd)
+            total_clean_correct += torch.sum(torch.argmax(total_preds[num_bd:], dim=1) == total_targets[num_bd:])
+            avg_acc_clean = total_clean_correct * 100.0 / total_clean
+            avg_acc_bd = total_bd_correct * 100.0 / total_bd
+            avg_loss_ce = total_loss_ce / total_sample
+            progress_bar(batch_idx, len(train_dl),"CE Loss: {:.4f} | Clean Acc: {:.4f} | Bd Acc: {:.4f} ".format(avg_loss_ce, avg_acc_clean, avg_acc_bd))
 
-        avg_loss_ce = total_loss_ce / total_sample
-        progress_bar(batch_idx, len(train_dl),"CE Loss: {:.4f} | Clean Acc: {:.4f} | Bd Acc: {:.4f} ".format(avg_loss_ce, avg_acc_clean, avg_acc_bd))
+            # Image for tensorboard
+            if batch_idx == len(train_dl) - 2:
+                residual = inputs_bd - input_origin
+                batch_img = torch.cat([input_origin, inputs_bd, total_inputs[:num_bd], residual], dim=2)
+                batch_img = denormalizer(batch_img)
+                batch_img = F.upsample(batch_img, scale_factor=(4, 4))
+                grid = torchvision.utils.make_grid(batch_img, normalize=True)
 
-        # Image for tensorboard
-        if batch_idx == len(train_dl) - 2:
-            residual = inputs_bd - input_origin
-            batch_img = torch.cat([input_origin, inputs_bd, total_inputs[:num_bd], residual], dim=2)
-            batch_img = denormalizer(batch_img)
-            batch_img = F.upsample(batch_img, scale_factor=(4, 4))
-            grid = torchvision.utils.make_grid(batch_img, normalize=True)
+        if opt.attack_choice == "clean":
+            num_bd = 0
+            input_origin = copy.deepcopy(inputs)
+            for id_img in range(bs):
+                if targets[id_img:(id_img + 1)] == opt.target_label:
+                    inputs[id_img:(id_img + 1), :, :, :] = F.grid_sample(inputs[id_img:(id_img + 1), :, :, :],
+                                                                                        grid_temps.repeat(1, 1, 1, 1),
+                                                                                        align_corners=True)
+                    num_bd += 1
+            preds = net(inputs)
+            loss_ce = criterion_CE(preds, targets)
+            loss = loss_ce
+            loss.backward()
+            optimizer.step()
+
+            total_loss_ce += loss_ce.detach()
+            total_sample += bs
+            total_clean_correct += torch.sum(torch.argmax(preds, dim=1) == targets)
+            avg_acc_clean = total_clean_correct * 100.0 / total_sample
+            avg_loss_ce = total_loss_ce / total_sample
+            progress_bar(batch_idx, len(train_dl),
+                         "CE Loss: {:.4f} | Clean Acc: {:.4f}".format(avg_loss_ce, avg_acc_clean))
+
+            # Image for tensorboard
+            if batch_idx == len(train_dl) - 2:
+                residual = inputs[:num_bd] - input_origin[:num_bd]
+                batch_img = torch.cat([input_origin[:num_bd], inputs[:num_bd], residual], dim=2)
+                batch_img = denormalizer(batch_img)
+                batch_img = F.upsample(batch_img, scale_factor=(4, 4))
+                grid = torchvision.utils.make_grid(batch_img, normalize=True)
 
     # for tensorboard
     if not epoch % 1:
-        tf_writer.add_scalars("Clean Accuracy", {"Clean": avg_acc_clean, "Bd": avg_acc_bd}, epoch)
-        tf_writer.add_image("Images", grid, global_step=epoch)
+        if opt.attack_choice == "dirty":
+            tf_writer.add_scalars("Clean Accuracy", {"Clean": avg_acc_clean, "Bd": avg_acc_bd}, epoch)
+            tf_writer.add_image("Images", grid, global_step=epoch)
+        else:
+            tf_writer.add_scalars("Clean Accuracy", {"Clean": avg_acc_clean}, epoch)
+            tf_writer.add_image("Images", grid, global_step=epoch)
     scheduler.step()
 
 
@@ -181,25 +216,46 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
             # Evaluate Clean
             preds_clean = net(inputs)
             total_clean_correct += torch.sum(torch.argmax(preds_clean, 1) == targets)
-            grid_temps = (identity_grid + opt.s * noise_grid / (opt.input_height // opt.ratio)) * opt.grid_rescale
-            grid_temps = torch.clamp(grid_temps, -1, 1).float()
-            inputs_bd = inputs
-            for idv_img in range(bs):
-                bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs_bd[idv_img])
-                inputs_bd[idv_img:(idv_img + 1), :, bbx1:bbx2, bby1:bby2] = F.grid_sample(
-                    inputs_bd[idv_img:(idv_img + 1), :, bbx1:bbx2, bby1:bby2], grid_temps.repeat(1, 1, 1, 1),
-                    align_corners=True)
-            if opt.attack_mode == "all2one":
-                targets_bd = torch.ones_like(targets) * opt.target_label
-            if opt.attack_mode == "all2all":
-                targets_bd = torch.remainder(targets + 1, opt.num_classes)
-            preds_bd = net(inputs_bd)
-            total_bd_correct += torch.sum(torch.argmax(preds_bd, 1) == targets_bd)
-            acc_clean = total_clean_correct * 100.0 / total_sample
-            acc_bd = total_bd_correct * 100.0 / total_sample
 
-            info_string = "Clean Acc: {:.4f} - Best: {:.4f} | Bd Acc: {:.4f} - Best: {:.4f}".format(acc_clean, best_clean_acc, acc_bd, best_bd_acc)
-            progress_bar(batch_idx, len(test_dl), info_string)
+            if opt.attack_choice == "dirty":
+                grid_temps = (identity_grid + opt.s * noise_grid / (opt.input_height // opt.ratio)) * opt.grid_rescale
+                grid_temps = torch.clamp(grid_temps, -1, 1).float()
+                inputs_bd = inputs
+                for idv_img in range(bs):
+                    bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs_bd[idv_img])
+                    inputs_bd[idv_img:(idv_img + 1), :, bbx1:bbx2, bby1:bby2] = F.grid_sample(
+                        inputs_bd[idv_img:(idv_img + 1), :, bbx1:bbx2, bby1:bby2], grid_temps.repeat(1, 1, 1, 1),
+                        align_corners=True)
+                if opt.attack_mode == "all2one":
+                    targets_bd = torch.ones_like(targets) * opt.target_label
+                if opt.attack_mode == "all2all":
+                    targets_bd = torch.remainder(targets + 1, opt.num_classes)
+                preds_bd = net(inputs_bd)
+                total_bd_correct += torch.sum(torch.argmax(preds_bd, 1) == targets_bd)
+                acc_clean = total_clean_correct * 100.0 / total_sample
+                acc_bd = total_bd_correct * 100.0 / total_sample
+
+                info_string = "Clean Acc: {:.4f} - Best: {:.4f} | Bd Acc: {:.4f} - Best: {:.4f}".format(acc_clean, best_clean_acc, acc_bd, best_bd_acc)
+                progress_bar(batch_idx, len(test_dl), info_string)
+
+            if opt.attack_choice == "clean":
+                grid_temps = (identity_grid + opt.s * noise_grid / (opt.input_height // opt.ratio)) * opt.grid_rescale
+                grid_temps = torch.clamp(grid_temps, -1, 1).float()
+                inputs_bd = inputs
+                for idv_img in range(bs):
+                    inputs_bd[idv_img:(idv_img + 1), :, :, :] = F.grid_sample(
+                        inputs_bd[idv_img:(idv_img + 1), :, :, :], grid_temps.repeat(1, 1, 1, 1),
+                        align_corners=True)
+                preds_bd = net(inputs_bd)
+                total_bd_correct += torch.sum(torch.argmax(preds_bd, 1) == opt.target_label)
+                acc_clean = total_clean_correct * 100.0 / total_sample
+                acc_bd = total_bd_correct * 100.0 / total_sample
+                info_string = "Clean Acc: {:.4f} - Best: {:.4f} | Bd Acc: {:.4f} - Best: {:.4f}".format(acc_clean,
+                                                                                                        best_clean_acc,
+                                                                                                        acc_bd,
+                                                                                                        best_bd_acc)
+                progress_bar(batch_idx, len(test_dl), info_string)
+
     # tensorboard
     if not epoch % 1:
         tf_writer.add_scalars("Test Accuracy", {"Clean": acc_clean, "Bd": acc_bd}, epoch)
@@ -210,14 +266,15 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
         best_clean_acc = acc_clean
         best_bd_acc = acc_bd
         state_dict = {
-            "netC": net.state_dict(),
-            "schedulerC": scheduler.state_dict(),
-            "optimizerC": optimizer.state_dict(),
+            "net": net.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "optimizer": optimizer.state_dict(),
             "best_clean_acc": best_clean_acc,
             "best_bd_acc": best_bd_acc,
             "epoch_current": epoch,
             "identity_grid": identity_grid,
             "noise_grid": noise_grid,
+            "attack_choice": opt.attack_choice
         }
         torch.save(state_dict, opt.ckpt_path)
         with open(os.path.join(opt.ckpt_folder, "results.txt"), "w+") as f:
@@ -262,14 +319,16 @@ def main():
     # Dataset
     train_dl = get_dataloader(opt, True)
     test_dl = get_dataloader(opt, False)
+
     # prepare model
     net, optimizer, scheduler = get_model(opt)
+
     # Load pretrained model
     mode = opt.attack_mode
-    # opt.ckpt_folder = os.path.join(opt.checkpoints, opt.dataset)
     opt.ckpt_folder = os.path.join(opt.checkpoints, 'cifar10')
-    opt.ckpt_path = os.path.join(opt.ckpt_folder, "{}_{}.pth.tar".format(opt.dataset, mode))
+    opt.ckpt_path = os.path.join(opt.ckpt_folder, "{}_{}_{}.pth.tar".format(opt.dataset, mode, opt.attack_choice))
     opt.log_dir = os.path.join(opt.ckpt_folder, "log_dir")
+
     if not os.path.exists(opt.log_dir):
         os.makedirs(opt.log_dir)
 

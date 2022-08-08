@@ -21,16 +21,14 @@ class ProbTransform(torch.nn.Module):
         else:
             return x
 
-def get_transform(opt, train=True, pretensor_transform=False):
+def get_transform(opt, train=True, pretensor_transform=True):
     transforms_list = []
     transforms_list.append(transforms.Resize((opt.input_height, opt.input_width)))
     if pretensor_transform:
         if train:
-            transforms_list.append(transforms.RandomCrop((opt.input_height, opt.input_width), padding=opt.random_crop))
-            transforms_list.append(transforms.RandomRotation(opt.random_rotation))
             if opt.dataset == "cifar10":
                 transforms_list.append(transforms.RandomHorizontalFlip(p=0.5))
-                if opt.aug:
+                if opt.attack_choice == "clean":
                     transforms_list.append(autoaugment.AutoAugment(policy='cifar10', interpolation='bilinear'))
     transforms_list.append(transforms.ToTensor())
     if opt.dataset == "cifar10":
