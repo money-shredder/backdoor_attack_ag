@@ -21,7 +21,6 @@ class ProbTransform(torch.nn.Module):
         else:
             return x
 
-
 def get_transform(opt, train=True):
     transforms_list = []
     transforms_list.append(transforms.Resize((opt.input_height, opt.input_width)))
@@ -118,7 +117,6 @@ class CelebA_attr(data.Dataset):
         input = self.transforms(input)
         target = self._convert_attributes(target[self.list_attributes])
         return (input, target)
-
 
 def get_dataloader(opt, train=True):
     transform = get_transform(opt, train)
