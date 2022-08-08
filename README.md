@@ -32,11 +32,11 @@ where the parameters are the following:
 
 The trained checkpoints should be saved at the path `checkpoints\<datasetName>\<datasetName>_<attackMode>_<attackChoice>.pth.tar`.
 
-Test for trained models, run command
+Test for trained models, run command (clean label)
 ```bash
 $ python eval.py --dataset <datasetName> --attack_choice clean 
 ```
-dirty label: control the whole training process
+dirty label:
 ```bash
 $ python eval.py --dataset <datasetName> --attack_mode <attackMode> 
 ```
