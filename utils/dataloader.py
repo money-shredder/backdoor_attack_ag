@@ -21,6 +21,7 @@ class ProbTransform(torch.nn.Module):
         else:
             return x
 
+
 def get_transform(opt, train=True):
     transforms_list = []
     transforms_list.append(transforms.Resize((opt.input_height, opt.input_width)))
