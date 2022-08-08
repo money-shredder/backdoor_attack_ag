@@ -1,7 +1,10 @@
 import os
 import sys
 import time
+import cv2
 import torch
+import config
+import numpy as np
 import torch.nn as nn
 import torch.nn.init as init
 
@@ -37,6 +40,60 @@ term_width = int(term_width)
 TOTAL_BAR_LENGTH = 65.0
 last_time = time.time()
 begin_time = last_time
+
+def saliency_bbox(img):
+    opt = config.get_arguments().parse_args()
+    size = img.size()
+    W = size[1]
+    H = size[2]
+    ratio = opt.ratio
+    cut_w = int(W // ratio)
+    cut_h = int(H // ratio)
+    if opt.dataset == "mnist":
+        x = 14
+        y = 14
+        bbx1 = np.clip(x - cut_w // 2, 0, W)
+        bby1 = np.clip(y - cut_h // 2, 0, H)
+        bbx2 = np.clip(x + cut_w // 2, 0, W)
+        bby2 = np.clip(y + cut_h // 2, 0, H)
+        if (x - cut_w // 2) < 0:
+            bbx1 = 0
+            bbx2 = W // opt.ratio
+        if (x + cut_w // 2) > W:
+            bbx1 = W - (W // opt.ratio)
+            bbx2 = W
+        if (y - cut_h // 2) < 0:
+            bby1 = 0
+            bby2 = H // opt.ratio
+        if (y + cut_h // 2) > H:
+            bby1 = H - (H // opt.ratio)
+            bby2 = H
+    else:
+        # compute the image saliency map
+        temp_img = img.cpu().numpy().transpose(1, 2, 0)
+        saliency = cv2.saliency.StaticSaliencyFineGrained_create()
+        (success, saliencyMap) = saliency.computeSaliency(temp_img)
+        saliencyMap = (saliencyMap * 255).astype("uint8")
+        maximum_indices = np.unravel_index(np.argmax(saliencyMap, axis=None), saliencyMap.shape)
+        x = maximum_indices[0]
+        y = maximum_indices[1]
+        bbx1 = np.clip(x - cut_w // 2, 0, W)
+        bby1 = np.clip(y - cut_h // 2, 0, H)
+        bbx2 = np.clip(x + cut_w // 2, 0, W)
+        bby2 = np.clip(y + cut_h // 2, 0, H)
+        if (x - cut_w // 2) < 0:
+            bbx1 = 0
+            bbx2 = W // opt.ratio
+        if (x + cut_w // 2) > W:
+            bbx1 = W - (W // opt.ratio)
+            bbx2 = W
+        if (y - cut_h // 2) < 0:
+            bby1 = 0
+            bby2 = H // opt.ratio
+        if (y + cut_h // 2) > H:
+            bby1 = H - (H // opt.ratio)
+            bby2 = H
+    return bbx1, bby1, bbx2, bby2
 
 def progress_bar(current, total, msg=None):
     global last_time, begin_time
