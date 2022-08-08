@@ -15,11 +15,12 @@ $ python -m pip install -r requirement.py
 
 ## Experiments
 Train command 
-clean label: only operate on images
+
+Clean label: only operate on images
 ```bash
 $ python train.py --dataset <datasetName> --attack_choice clean 
 ```
-dirty label: control the whole training process
+Dirty label: control the whole training process
 ```bash
 $ python train.py --dataset <datasetName> --attack_mode <attackMode> 
 ```
