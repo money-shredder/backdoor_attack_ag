@@ -21,15 +21,14 @@ class ProbTransform(torch.nn.Module):
         else:
             return x
 
-def get_transform(opt, train=True, pretensor_transform=True):
+def get_transform(opt, train=True):
     transforms_list = []
     transforms_list.append(transforms.Resize((opt.input_height, opt.input_width)))
-    if pretensor_transform:
-        if train:
-            if opt.dataset == "cifar10":
-                transforms_list.append(transforms.RandomHorizontalFlip(p=0.5))
-                if opt.attack_choice == "clean":
-                    transforms_list.append(autoaugment.AutoAugment(policy='cifar10', interpolation='bilinear'))
+    if train:
+        if opt.dataset == "cifar10":
+            transforms_list.append(transforms.RandomHorizontalFlip(p=0.5))
+            if opt.attack_choice == "clean":
+                transforms_list.append(autoaugment.AutoAugment(policy='cifar10', interpolation='bilinear'))
     transforms_list.append(transforms.ToTensor())
     if opt.dataset == "cifar10":
         transforms_list.append(transforms.Normalize([0.4914, 0.4822, 0.4465], [0.247, 0.243, 0.261]))
@@ -120,8 +119,8 @@ class CelebA_attr(data.Dataset):
         return (input, target)
 
 
-def get_dataloader(opt, train=True, pretensor_transform=False):
-    transform = get_transform(opt, train, pretensor_transform)
+def get_dataloader(opt, train=True):
+    transform = get_transform(opt, train)
     if opt.dataset == "gtsrb":
         dataset = GTSRB(opt, train, transform)
     elif opt.dataset == "mnist":
