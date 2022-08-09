@@ -21,7 +21,7 @@ def get_model(opt):
     if opt.dataset == "cifar10" or opt.dataset == "gtsrb":
         net = PreActResNet18(num_classes=opt.num_classes).to(opt.device)
     if opt.dataset == "celeba":
-        net = ResNet18().to(opt.device)
+        net = ResNet18(num_classes=opt.num_classes).to(opt.device)
     if opt.dataset == "mnist":
         net = MNISTnet().to(opt.device)
     optimizer = torch.optim.SGD(net.parameters(), opt.lr, momentum=0.9, weight_decay=5e-4)
@@ -51,11 +51,11 @@ def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_wri
         inputs, targets = inputs.to(opt.device), targets.to(opt.device)
         bs = inputs.shape[0]
 
-        # Create backdoor data
-        grid_temps = (identity_grid + opt.s * noise_grid / (opt.input_height // opt.ratio)) * opt.grid_rescale
-        grid_temps = torch.clamp(grid_temps, -1, 1).float()
-
         if opt.attack_choice == "dirty":
+            # Create backdoor data
+            grid_temps = (identity_grid + opt.s * noise_grid[0] / (opt.input_height // opt.ratio)) * opt.grid_rescale
+            grid_temps = torch.clamp(grid_temps, -1, 1).float()
+
             num_bd = int(bs * rate_bd)
             input_origin = copy.deepcopy(inputs[:num_bd])
             inputs_bd = inputs[:num_bd]
@@ -102,11 +102,19 @@ def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_wri
             num_bd = 0
             input_origin = copy.deepcopy(inputs)
             for id_img in range(bs):
-                if targets[id_img:(id_img + 1)] == opt.target_label:
-                    inputs[id_img:(id_img + 1), :, :, :] = F.grid_sample(inputs[id_img:(id_img + 1), :, :, :],
-                                                                                        grid_temps.repeat(1, 1, 1, 1),
-                                                                                        align_corners=True)
+                temp_label = targets[id_img]
+                grid_temps = (identity_grid + opt.s * noise_grid[temp_label] / (
+                            opt.input_height // opt.ratio)) * opt.grid_rescale
+                grid_temps = torch.clamp(grid_temps, -1, 1).float()
+                p = torch.rand(1)
+                if p > 0.5:
+                    bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs[id_img])
+                    temp = inputs[id_img:(id_img + 1), :, bbx1:bbx2, bby1:bby2]
+                    inputs[id_img:(id_img + 1), :, bbx1:bbx2, bby1:bby2] = F.grid_sample(temp,
+                                                                                            grid_temps.repeat(1, 1, 1, 1),
+                                                                                            align_corners=True)
                     num_bd += 1
+
             preds = net(inputs)
             loss_ce = criterion_CE(preds, targets)
             loss = loss_ce
@@ -157,9 +165,10 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
             preds_clean = net(inputs)
             total_clean_correct += torch.sum(torch.argmax(preds_clean, 1) == targets)
 
+            grid_temps = (identity_grid + opt.s * noise_grid[0] / (opt.input_height // opt.ratio)) * opt.grid_rescale
+            grid_temps = torch.clamp(grid_temps, -1, 1).float()
+
             if opt.attack_choice == "dirty":
-                grid_temps = (identity_grid + opt.s * noise_grid / (opt.input_height // opt.ratio)) * opt.grid_rescale
-                grid_temps = torch.clamp(grid_temps, -1, 1).float()
                 inputs_bd = inputs
                 for idv_img in range(bs):
                     bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs_bd[idv_img])
@@ -179,12 +188,12 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
                 progress_bar(batch_idx, len(test_dl), info_string)
 
             if opt.attack_choice == "clean":
-                grid_temps = (identity_grid + opt.s * noise_grid / (opt.input_height // opt.ratio)) * opt.grid_rescale
-                grid_temps = torch.clamp(grid_temps, -1, 1).float()
                 inputs_bd = inputs
                 for idv_img in range(bs):
-                    inputs_bd[idv_img:(idv_img + 1), :, :, :] = F.grid_sample(
-                        inputs_bd[idv_img:(idv_img + 1), :, :, :], grid_temps.repeat(1, 1, 1, 1),
+                    bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs_bd[idv_img])
+                    temp = inputs_bd[idv_img:(idv_img + 1), :, bbx1:bbx2, bby1:bby2]
+                    inputs_bd[idv_img:(idv_img + 1), :, bbx1:bbx2, bby1:bby2] = F.grid_sample(
+                        temp, grid_temps.repeat(1, 1, 1, 1),
                         align_corners=True)
                 preds_bd = net(inputs_bd)
                 total_bd_correct += torch.sum(torch.argmax(preds_bd, 1) == opt.target_label)
@@ -295,14 +304,16 @@ def main():
         epoch_current = 0
 
         # Prepare grid
-        ins = np.random.beta(1, 1, (1, 2, opt.k, opt.k)) * 2 - 1
+        ins = np.random.beta(100, 100, (opt.num_classes, 1, 2, opt.k, opt.k)) * 2 - 1
         ins = torch.tensor(ins)
-        ins = ins / torch.mean(torch.abs(ins))
-        noise_grid = (
-            F.upsample(ins, size=(opt.input_height // opt.ratio), mode="bicubic", align_corners=True)
-                .permute(0, 2, 3, 1)
-                .to(opt.device)
-        )
+        noise_grid = torch.empty(opt.num_classes, 1, (opt.input_height // opt.ratio), (opt.input_height // opt.ratio), 2).to(opt.device)
+        for i in range(opt.num_classes):
+            ins[i] = ins[i] / torch.mean(torch.abs(ins[i]))
+            noise_grid[i:i+1] = (
+                F.upsample(ins[i], size=(opt.input_height // opt.ratio), mode="bicubic", align_corners=True)
+                    .permute(0, 2, 3, 1)
+                    .to(opt.device)
+            )
         array1d = torch.linspace(-1, 1, steps=opt.input_height // opt.ratio)
         x, y = torch.meshgrid(array1d, array1d)
         identity_grid = torch.stack((y, x), dim=2)[None, ...].to(opt.device)

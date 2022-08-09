@@ -6,6 +6,7 @@ import os
 import csv
 import kornia.augmentation as A
 import random
+from augment.randaugment import Rand_Augment
 from PIL import Image
 
 
@@ -27,8 +28,7 @@ def get_transform(opt, train=True):
     if train:
         if opt.dataset == "cifar10":
             transforms_list.append(transforms.RandomHorizontalFlip(p=0.5))
-            if opt.attack_choice == "clean":
-                transforms_list.append(autoaugment.AutoAugment(policy='cifar10', interpolation='bilinear'))
+            transforms_list.append(Rand_Augment())
     transforms_list.append(transforms.ToTensor())
     if opt.dataset == "cifar10":
         transforms_list.append(transforms.Normalize([0.4914, 0.4822, 0.4465], [0.247, 0.243, 0.261]))
