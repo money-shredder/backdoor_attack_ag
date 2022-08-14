@@ -13,7 +13,7 @@ from model.MNISTnet import MNISTnet
 from network.models import Denormalizer
 from torch.utils.tensorboard import SummaryWriter
 from utils.dataloader import PostTensorTransform, get_dataloader
-from utils.utils import progress_bar, saliency_bbox
+from utils.utils import progress_bar, saliency_bbox, unsaliency_bbox
 import os
 
 
@@ -29,7 +29,7 @@ def get_model(opt):
     return net, optimizer, scheduler
 
 
-def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_writer, epoch, opt):
+def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, ins1, tf_writer, epoch, opt):
     print(" Train:")
     device_ids = [0, 1, 2]
     net = torch.nn.DataParallel(net, device_ids=device_ids).cuda()
@@ -53,7 +53,7 @@ def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_wri
 
         if opt.attack_choice == "dirty":
             # Create backdoor data
-            grid_temps = (identity_grid + opt.s * noise_grid[0] / (opt.input_height // opt.ratio)) * opt.grid_rescale
+            grid_temps = (identity_grid + opt.s * noise_grid[0] / (opt.input_height // opt.ratio))
             grid_temps = torch.clamp(grid_temps, -1, 1).float()
 
             num_bd = int(bs * rate_bd)
@@ -103,15 +103,15 @@ def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_wri
             input_origin = copy.deepcopy(inputs)
             for id_img in range(bs):
                 temp_label = targets[id_img]
-                grid_temps = (identity_grid + opt.s * noise_grid[temp_label] / (
-                            opt.input_height // opt.ratio)) * opt.grid_rescale
-                grid_temps = torch.clamp(grid_temps, -1, 1).float()
+                grid_temps2 = (identity_grid + ins1[temp_label] / (
+                        opt.input_height // opt.ratio))
+                grid_temps2 = torch.clamp(grid_temps2, -1, 1).float()
                 p = torch.rand(1)
-                if p > 0.5:
-                    bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs[id_img])
+                if p > opt.p:
+                    bbx1, bby1, bbx2, bby2 = unsaliency_bbox(inputs[id_img])
                     temp = inputs[id_img:(id_img + 1), :, bbx1:bbx2, bby1:bby2]
                     inputs[id_img:(id_img + 1), :, bbx1:bbx2, bby1:bby2] = F.grid_sample(temp,
-                                                                                            grid_temps.repeat(1, 1, 1, 1),
+                                                                                            grid_temps2.repeat(1, 1, 1, 1),
                                                                                             align_corners=True)
                     num_bd += 1
 
@@ -148,7 +148,7 @@ def train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_wri
     scheduler.step()
 
 
-def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_clean_acc, best_bd_acc, tf_writer, epoch, opt):
+def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, ins1, best_clean_acc, best_bd_acc, tf_writer, epoch, opt):
     print(" Eval:")
     net.to(opt.device)
     net.eval()
@@ -165,8 +165,12 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
             preds_clean = net(inputs)
             total_clean_correct += torch.sum(torch.argmax(preds_clean, 1) == targets)
 
-            grid_temps = (identity_grid + opt.s * noise_grid[0] / (opt.input_height // opt.ratio)) * opt.grid_rescale
+            grid_temps = (identity_grid + opt.s * noise_grid[0] / (opt.input_height // opt.ratio))
             grid_temps = torch.clamp(grid_temps, -1, 1).float()
+            grid_temps2 = (identity_grid + ins1[0] / (
+                    opt.input_height // opt.ratio))
+            grid_temps2 = torch.clamp(grid_temps2, -1, 1).float()
+
 
             if opt.attack_choice == "dirty":
                 inputs_bd = inputs
@@ -193,10 +197,11 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
                     bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs_bd[idv_img])
                     temp = inputs_bd[idv_img:(idv_img + 1), :, bbx1:bbx2, bby1:bby2]
                     inputs_bd[idv_img:(idv_img + 1), :, bbx1:bbx2, bby1:bby2] = F.grid_sample(
-                        temp, grid_temps.repeat(1, 1, 1, 1),
+                        temp, grid_temps2.repeat(1, 1, 1, 1),
                         align_corners=True)
                 preds_bd = net(inputs_bd)
-                total_bd_correct += torch.sum(torch.argmax(preds_bd, 1) == opt.target_label)
+                targets_bd = torch.ones_like(targets) * opt.target_label
+                total_bd_correct += torch.sum(torch.argmax(preds_bd, 1) == targets_bd)
                 acc_clean = total_clean_correct * 100.0 / total_sample
                 acc_bd = total_bd_correct * 100.0 / total_sample
                 info_string = "Clean Acc: {:.4f} - Best: {:.4f} | Bd Acc: {:.4f} - Best: {:.4f}".format(acc_clean,
@@ -222,6 +227,7 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
             "best_bd_acc": best_bd_acc,
             "epoch_current": epoch,
             "identity_grid": identity_grid,
+            "ins1":ins1,
             "noise_grid": noise_grid,
             "attack_choice": opt.attack_choice
         }
@@ -274,7 +280,7 @@ def main():
 
     # Load pretrained model
     mode = opt.attack_mode
-    opt.ckpt_folder = os.path.join(opt.checkpoints, 'cifar10')
+    opt.ckpt_folder = os.path.join(opt.checkpoints, 'cifar10-0.75')
     opt.ckpt_path = os.path.join(opt.ckpt_folder, "{}_{}_{}.pth.tar".format(opt.dataset, mode, opt.attack_choice))
     opt.log_dir = os.path.join(opt.ckpt_folder, "log_dir")
 
@@ -292,6 +298,7 @@ def main():
             best_bd_acc = state_dict["best_bd_acc"]
             epoch_current = state_dict["epoch_current"]
             identity_grid = state_dict["identity_grid"]
+            ins1 = state_dict["ins1"]
             noise_grid = state_dict["noise_grid"]
             tf_writer = SummaryWriter(log_dir=opt.log_dir)
         else:
@@ -304,7 +311,7 @@ def main():
         epoch_current = 0
 
         # Prepare grid
-        ins = np.random.beta(100, 100, (opt.num_classes, 1, 2, opt.k, opt.k)) * 2 - 1
+        ins = np.random.beta(1, 1, (opt.num_classes, 1, 2, opt.k, opt.k)) * 2 - 1
         ins = torch.tensor(ins)
         noise_grid = torch.empty(opt.num_classes, 1, (opt.input_height // opt.ratio), (opt.input_height // opt.ratio), 2).to(opt.device)
         for i in range(opt.num_classes):
@@ -317,6 +324,9 @@ def main():
         array1d = torch.linspace(-1, 1, steps=opt.input_height // opt.ratio)
         x, y = torch.meshgrid(array1d, array1d)
         identity_grid = torch.stack((y, x), dim=2)[None, ...].to(opt.device)
+        ins1 = np.random.beta(2, 2, (opt.num_classes, 1, (opt.input_height // opt.ratio), (opt.input_height // opt.ratio), 2)) * 2 - 1
+        ins1 = torch.tensor(ins1).to(opt.device)
+
 
         shutil.rmtree(opt.ckpt_folder, ignore_errors=True)
         os.makedirs(opt.log_dir)
@@ -326,8 +336,8 @@ def main():
 
     for epoch in range(epoch_current, opt.n_iters):
         print("Epoch {}:".format(epoch + 1))
-        train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, tf_writer, epoch, opt)
-        best_clean_acc, best_bd_acc = eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_clean_acc, best_bd_acc, tf_writer, epoch, opt)
+        train(net, optimizer, scheduler, train_dl, noise_grid, identity_grid, ins1, tf_writer, epoch, opt)
+        best_clean_acc, best_bd_acc = eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, ins1, best_clean_acc, best_bd_acc, tf_writer, epoch, opt)
 
 
 if __name__ == "__main__":

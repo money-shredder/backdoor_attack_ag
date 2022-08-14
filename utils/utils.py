@@ -95,6 +95,42 @@ def saliency_bbox(img):
             bby2 = H
     return bbx1, bby1, bbx2, bby2
 
+def unsaliency_bbox(img):
+    opt = config.get_arguments().parse_args()
+    size = img.size()
+    W = size[1]
+    H = size[2]
+    ratio = opt.ratio
+    cut_w = int(W // ratio)
+    cut_h = int(H // ratio)
+    if opt.dataset == "mnist":
+            bbx1 = 0
+            bbx2 = W // opt.ratio
+            bby1 = 0
+            bby2 = H // opt.ratio
+    else:
+        # compute the image saliency map
+        temp_img = img.cpu().numpy().transpose(1, 2, 0)
+        saliency = cv2.saliency.StaticSaliencyFineGrained_create()
+        (success, saliencyMap) = saliency.computeSaliency(temp_img)
+        saliencyMap = (saliencyMap * 255).astype("uint8")
+        maximum_indices = np.unravel_index(np.argmax(saliencyMap, axis=None), saliencyMap.shape)
+        x = maximum_indices[0]
+        y = maximum_indices[1]
+        if x < cut_w:
+            bbx1 = W - W // opt.ratio
+            bbx2 = W
+        else:
+            bbx1 = 0
+            bbx2 = W // opt.ratio
+        if y < cut_h:
+            bby1 = H - H // opt.ratio
+            bby2 = H
+        else:
+            bby1 = 0
+            bby2 = H // opt.ratio
+    return bbx1, bby1, bbx2, bby2
+
 def progress_bar(current, total, msg=None):
     global last_time, begin_time
     if current == 0:

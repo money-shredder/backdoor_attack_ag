@@ -24,7 +24,7 @@ def get_model(opt):
     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, opt.scheduler_milestones, opt.scheduler_lambda)
     return net, optimizer, scheduler
 
-def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_clean_acc, best_bd_acc, tf_writer, epoch, opt):
+def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, ins1 ,best_clean_acc, best_bd_acc, tf_writer, epoch, opt):
     print(" Eval:")
     net.to(opt.device)
     net.eval()
@@ -42,7 +42,7 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
             total_clean_correct += torch.sum(torch.argmax(preds_clean, 1) == targets)
 
             if opt.attack_choice == "dirty":
-                grid_temps = (identity_grid + opt.s * noise_grid[0] / (opt.input_height // opt.ratio)) * opt.grid_rescale
+                grid_temps = (identity_grid + opt.s * noise_grid[0] / (opt.input_height // opt.ratio))
                 grid_temps = torch.clamp(grid_temps, -1, 1).float()
                 inputs_bd = inputs
                 for idv_img in range(bs):
@@ -63,14 +63,15 @@ def eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, best_cle
                 progress_bar(batch_idx, len(test_dl), info_string)
 
             if opt.attack_choice == "clean":
-                grid_temps = (identity_grid + opt.s * noise_grid[0] / (opt.input_height // opt.ratio)) * opt.grid_rescale
-                grid_temps = torch.clamp(grid_temps, -1, 1).float()
+                grid_temps2 = (identity_grid + ins1[0] / (
+                        opt.input_height // opt.ratio))
+                grid_temps2 = torch.clamp(grid_temps2, -1, 1).float()
                 inputs_bd = inputs
                 for idv_img in range(bs):
                     bbx1, bby1, bbx2, bby2 = saliency_bbox(inputs_bd[idv_img])
                     temp = inputs_bd[idv_img:(idv_img + 1), :, bbx1:bbx2, bby1:bby2]
                     inputs_bd[idv_img:(idv_img + 1), :, :, :] = F.grid_sample(
-                        temp, grid_temps.repeat(1, 1, 1, 1),
+                        temp, grid_temps2.repeat(1, 1, 1, 1),
                         align_corners=True)
                 preds_bd = net(inputs_bd)
                 total_bd_correct += torch.sum(torch.argmax(preds_bd, 1) == opt.target_label)
@@ -123,8 +124,9 @@ def main():
     state_dict = torch.load(opt.ckpt_path)
     net.load_state_dict(state_dict["net"])
     identity_grid = state_dict["identity_grid"]
+    ins1 = state_dict["ins1"]
     noise_grid = state_dict["noise_grid"]
-    eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, opt)
+    eval(net, optimizer, scheduler, test_dl, noise_grid, identity_grid, ins1, opt)
 
 
 if __name__ == "__main__":
