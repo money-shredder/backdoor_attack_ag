@@ -44,7 +44,10 @@ class PostTensorTransform(torch.nn.Module):
     def __init__(self, opt):
         super(PostTensorTransform, self).__init__()
         self.random_crop = ProbTransform(A.RandomCrop((opt.input_height, opt.input_width), padding=opt.random_crop), p=0.8)
-        self.random_rotation = ProbTransform(A.RandomRotation(opt.random_rotation), p=0.5)
+        self.random_rotation = ProbTransform(A.RandomRotation(opt.random_rotation), p=0.8)
+        self.random_tra = ProbTransform(A.RandomAffine(degrees=20, translate=(0, 0.2)), p=0.8)
+        self.random_shear = ProbTransform(A.RandomAffine(degrees=30, shear = (0, 0.5, 0, 0.5)), p=0.8)
+
         if opt.dataset == "cifar10":
             self.random_horizontal_flip = A.RandomHorizontalFlip(p=0.5)
     def forward(self, x):
