@@ -6,7 +6,7 @@ import os
 import csv
 import kornia.augmentation as A
 import random
-from augment.randaugment import Rand_Augment
+from augment.flowaugment import Flow_Augment
 from PIL import Image
 
 
@@ -28,7 +28,7 @@ def get_transform(opt, train=True):
     if train:
         if opt.dataset == "cifar10":
             transforms_list.append(transforms.RandomHorizontalFlip(p=0.5))
-            transforms_list.append(Rand_Augment())
+            transforms_list.append(Flow_Augment())
     transforms_list.append(transforms.ToTensor())
     if opt.dataset == "cifar10":
         transforms_list.append(transforms.Normalize([0.4914, 0.4822, 0.4465], [0.247, 0.243, 0.261]))
@@ -44,9 +44,9 @@ class PostTensorTransform(torch.nn.Module):
     def __init__(self, opt):
         super(PostTensorTransform, self).__init__()
         self.random_crop = ProbTransform(A.RandomCrop((opt.input_height, opt.input_width), padding=opt.random_crop), p=0.8)
-        self.random_rotation = ProbTransform(A.RandomRotation(opt.random_rotation), p=0.8)
-        self.random_tra = ProbTransform(A.RandomAffine(degrees=20, translate=(0, 0.2)), p=0.8)
-        self.random_shear = ProbTransform(A.RandomAffine(degrees=30, shear = (0, 0.5, 0, 0.5)), p=0.8)
+        self.random_rotation = ProbTransform(A.RandomRotation(opt.random_rotation), p=1)
+        self.random_tra = ProbTransform(A.RandomAffine(degrees=20, translate=(0, 0.2)), p=1)
+        self.random_shear = ProbTransform(A.RandomAffine(degrees=30, shear = (0, 0.5, 0, 0.5)), p=1)
 
         if opt.dataset == "cifar10":
             self.random_horizontal_flip = A.RandomHorizontalFlip(p=0.5)

@@ -1,12 +1,10 @@
-from PIL import Image
 import matplotlib.pyplot as plt
-import numpy as np
 from PIL import Image, ImageEnhance, ImageOps
 import numpy as np
 import random
 
 
-class Rand_Augment():
+class Flow_Augment():
     def __init__(self, Numbers=None, max_Magnitude=None):
         self.transforms = ['autocontrast', 'equalize', 'rotate', 'solarize', 'color', 'posterize',
                            'contrast', 'brightness', 'sharpness', 'shearX', 'shearY', 'translateX', 'translateY']
@@ -113,7 +111,7 @@ if __name__ == '__main__':
     # print('how to  call')
 
     # this  is for  a  single  fun  you  want to test
-    img_augment = Rand_Augment()
+    img_augment = Flow_Augment()
     img_origal = Image.open(r'0bfdedaa60b54078ab0fc3bc6582aa90.jpg')
     for i in range(0, 10):
         img_final = img_augment.test_single_operation(img_origal, 'invert', M=i)

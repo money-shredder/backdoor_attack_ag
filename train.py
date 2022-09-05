@@ -7,7 +7,6 @@ import torch
 import torch.nn.functional as F
 import torchvision
 from model.resnet import ResNet18
-from model.preact_resnet import PreActResNet18
 from model.MNISTnet import MNISTnet
 from network.models import Denormalizer
 from torch.utils.tensorboard import SummaryWriter
@@ -18,7 +17,7 @@ import os
 
 def get_model(opt):
     if opt.dataset == "cifar10" or opt.dataset == "gtsrb":
-        net = PreActResNet18(num_classes=opt.num_classes).to(opt.device)
+        net = ResNet18(num_classes=opt.num_classes).to(opt.device)
     if opt.dataset == "celeba":
         net = ResNet18(num_classes=opt.num_classes).to(opt.device)
     if opt.dataset == "mnist":
@@ -46,7 +45,8 @@ def train(net, optimizer, scheduler, train_dl, identity_grid, ins1, tf_writer, e
         bs = inputs.shape[0]
         num_bd = 0
         input_origin = copy.deepcopy(inputs)
-        for id_img in range(bs * 7 //10):
+        inputs[bs * 45 //100:] = transforms(inputs[bs * 45 //100:])
+        for id_img in range(bs * 5 //10):
             temp_label = targets[id_img]
             grid_temps = (identity_grid + ins1[temp_label] /
                     opt.input_height)
@@ -62,8 +62,6 @@ def train(net, optimizer, scheduler, train_dl, identity_grid, ins1, tf_writer, e
                                                                           grid_temps.repeat(1, 1, 1, 1),
                                                                           align_corners=True)
             num_bd += 1
-        inputs_ag = transforms(inputs[bs * 7 //10:])
-        inputs = torch.cat((inputs[:bs * 7 //10], inputs_ag), dim=0)
         preds = net(inputs)
         loss_ce = criterion_CE(preds, targets)
         loss = loss_ce
@@ -109,7 +107,7 @@ def eval(net, optimizer, scheduler, test_dl, identity_grid, ins1, best_clean_acc
             # Evaluate Clean
             preds_clean = net(inputs)
             total_clean_correct += torch.sum(torch.argmax(preds_clean, 1) == targets)
-            grid_temps = (identity_grid + ins1[0] / opt.input_height)
+            grid_temps = (identity_grid + ins1[opt.target_label] / opt.input_height)
             grid_temps = torch.clamp(grid_temps, -1, 1).float()
 
             inputs_bd = inputs
@@ -198,7 +196,7 @@ def main():
     net, optimizer, scheduler = get_model(opt)
 
     # Load pretrained model
-    opt.ckpt_folder = os.path.join(opt.checkpoints, 'cifar10-p=0.5_ag')
+    opt.ckpt_folder = os.path.join(opt.checkpoints, 'cifar10-p=0.5=0.5')
     opt.ckpt_path = os.path.join(opt.ckpt_folder, "{}.pth.tar".format(opt.dataset))
     opt.log_dir = os.path.join(opt.ckpt_folder, "log_dir")
 
